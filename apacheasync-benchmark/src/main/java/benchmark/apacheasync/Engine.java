@@ -10,11 +10,18 @@ import org.apache.http.entity.StringEntity;
 import org.apache.http.impl.nio.client.CloseableHttpAsyncClient;
 import org.apache.http.impl.nio.client.HttpAsyncClientBuilder;
 import org.apache.http.impl.nio.client.HttpAsyncClients;
+import org.apache.http.impl.nio.conn.PoolingNHttpClientConnectionManager;
+import org.apache.http.impl.nio.reactor.DefaultConnectingIOReactor;
+import org.apache.http.impl.nio.reactor.IOReactorConfig;
+import org.apache.http.nio.reactor.ConnectingIOReactor;
+import org.apache.http.nio.reactor.IOReactorException;
+import org.apache.http.ssl.SSLContexts;
 import org.apache.http.util.EntityUtils;
 
 import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Future;
+import javax.net.ssl.SSLContext;
 
 public class Engine implements HttpClientEngine {
     private CloseableHttpAsyncClient client;
@@ -27,12 +34,29 @@ public class Engine implements HttpClientEngine {
     String baseUrl = null;
 
     @Override
-    public void createClient(String host, int port) {
+    public void createClient(String host, int port)  {
         this.baseUrl = url(host, port);
-        HttpAsyncClientBuilder httpAsyncClientBuilder = HttpAsyncClients.custom();
-        httpAsyncClientBuilder
-                .setMaxConnTotal(MAX_CONNECTION_POOL_SIZE);
-        client = httpAsyncClientBuilder.build();
+        ConnectingIOReactor ioReactor;
+        try {
+            ioReactor = new DefaultConnectingIOReactor();
+        } catch (IOReactorException e) {
+            throw new RuntimeException(e);
+        }
+        // Create connection manager with SSLContext
+        PoolingNHttpClientConnectionManager connectionManager = new PoolingNHttpClientConnectionManager(ioReactor);
+
+        // Set maximum connections per route
+        connectionManager.setDefaultMaxPerRoute(MAX_CONNECTION_POOL_SIZE_PER_HOST);
+        connectionManager.setMaxTotal(MAX_CONNECTION_POOL_SIZE);
+
+         client = HttpAsyncClientBuilder.create().setConnectionManager(connectionManager)
+                                        .setDefaultRequestConfig(RequestConfig.custom().setConnectTimeout(-1)
+                                                                                                          .setSocketTimeout(READ_TIMEOUT)
+                                                                                                          .setConnectionRequestTimeout(CONNECT_TIMEOUT)
+                                                                                                          .build())
+                                                                    .build();
+
+        // Start the client
         client.start();
     }
 

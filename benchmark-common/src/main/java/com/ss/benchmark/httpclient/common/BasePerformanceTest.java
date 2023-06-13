@@ -1,5 +1,7 @@
 package com.ss.benchmark.httpclient.common;
 
+import static com.ss.benchmark.httpclient.common.HttpClientEngine.MAX_CONNECTION_POOL_SIZE;
+import static com.ss.benchmark.httpclient.common.HttpClientEngine.MAX_CONNECTION_POOL_SIZE_PER_HOST;
 import com.codahale.metrics.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -10,8 +12,10 @@ import java.io.IOException;
 import java.lang.reflect.Method;
 import java.time.Instant;
 import java.util.HashSet;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
 /**
@@ -36,6 +40,7 @@ import java.util.function.Supplier;
 @Test(groups = "performance")
 public abstract class BasePerformanceTest {
 
+    AtomicInteger rateLimiter = new AtomicInteger(0);
     protected static final String HELLO_URL = "/hello";
     protected static final String MOCK_SHORT_URL = "/short";
     protected static final String MOCK_LONG_URL = "/long";
@@ -78,6 +83,7 @@ public abstract class BasePerformanceTest {
     @BeforeTest
     public void beforeTest() {
         // output metrics on a schedule
+        rateLimiter.set(0);
         if (DROPWIZARD_REPORTER_SECONDS > 0) {
             reporter.start(DROPWIZARD_REPORTER_SECONDS, TimeUnit.SECONDS);
         }
@@ -136,14 +142,12 @@ public abstract class BasePerformanceTest {
         String method = m.getName();
 
         LOGGER.debug("Start " + method);
-
-        for (int i = 0; i < HttpClientEngine.MAX_CONNECTION_POOL_SIZE; i++) {
-            syncGET(
+            nonBlockingAsyncGET(
+                    MAX_CONNECTION_POOL_SIZE,
                     MOCK_SHORT_URL,
                     Payloads.SHORT,
                     metricRegistry.timer(MetricRegistry.name(this.getClass(), method, "timing")),
                     metricRegistry.counter(MetricRegistry.name(this.getClass(), method, "errorRate")));
-        }
     }
 
     @Test(priority = 1, invocationCount = BlockingVars.EXECUTIONS, threadPoolSize = BlockingVars.WORKERS, groups = {"blocking"})
@@ -295,6 +299,8 @@ public abstract class BasePerformanceTest {
         CountDownLatch latch = new CountDownLatch(executions);
         nonBlockingLatches.add(latch);
         for (int i = 0; i < executions; i++) {
+            while (rateLimiter.get() >= MAX_CONNECTION_POOL_SIZE_PER_HOST);
+            rateLimiter.incrementAndGet();
             asyncGET(url, expectedResponsePayload, latch, timer, errors);
         }
     }
@@ -310,6 +316,8 @@ public abstract class BasePerformanceTest {
         CountDownLatch latch = new CountDownLatch(executions);
         nonBlockingLatches.add(latch);
         for (int i = 0; i < executions; i++) {
+            while (rateLimiter.get() >= MAX_CONNECTION_POOL_SIZE_PER_HOST);
+            rateLimiter.incrementAndGet();
             asyncPOST(url, payload, expectedResponsePayload, latch, timer, errors);
         }
     }
@@ -389,10 +397,14 @@ public abstract class BasePerformanceTest {
             CompletableFuture<String> cf = op.get();
             cf.handle((result, ex) -> {
                 if (ex != null || !expectedResponsePayload.equals(result)) {
+                    if (Objects.nonNull(ex)) {
+                       LOGGER.error("async client ex : {}", ex.getMessage());
+                    }
                     errors.inc();
                 } else {
                     ctx.stop(); // the goal is to not count error cases in the timing metrics
                 }
+                rateLimiter.decrementAndGet();
                 latch.countDown();
                 return result;
             });

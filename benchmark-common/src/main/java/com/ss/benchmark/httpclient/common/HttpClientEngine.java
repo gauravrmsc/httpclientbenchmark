@@ -9,9 +9,11 @@ import static com.ss.benchmark.httpclient.common.Exceptions.rethrowChecked;
 public interface HttpClientEngine extends Closeable {
 
     //All times are milliseconds unless otherwise noted
-    int MAX_CONNECTION_POOL_SIZE = 200;
-    int CONNECT_TIMEOUT = 5_000;
-    int READ_TIMEOUT = 50_000;
+    int MAX_CONNECTION_POOL_SIZE = 3000;
+
+    int MAX_CONNECTION_POOL_SIZE_PER_HOST = 2900;
+    int CONNECT_TIMEOUT = 1_000;
+    int READ_TIMEOUT = 5_000;
 
     /**
      * HTTP protocol is assumed.
